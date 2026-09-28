@@ -44,13 +44,31 @@ async def chat_with_agent(agent, runner, user_message: str, session_id=None):
         parts=[types.Part.from_text(text=user_message)],
     )
 
-    final_response = ""
-    async for event in runner.run_async(
-        user_id=user_id, session_id=session.id, new_message=content
-    ):
-        if hasattr(event, "content") and event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    final_response += part.text
+    import asyncio
 
-    return final_response, session
+    for attempt in range(5):
+        try:
+            final_response = ""
+            async for event in runner.run_async(
+                user_id=user_id, session_id=session.id, new_message=content
+            ):
+                if hasattr(event, "content") and event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            final_response += part.text
+            return final_response, session
+        except Exception as e:
+            err_str = str(e)
+            is_transient = any(
+                k in err_str
+                for k in ("429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "high demand")
+            ) or any(
+                cls_name in type(e).__name__
+                for cls_name in ("ResourceExhausted", "ServerError", "ServiceUnavailable")
+            )
+            if is_transient and attempt < 4:
+                wait_s = 10 * (attempt + 1)
+                print(f"ADK API transient error ({type(e).__name__}), waiting {wait_s}s before retry ({attempt+1}/5)...")
+                await asyncio.sleep(wait_s)
+            else:
+                raise e
